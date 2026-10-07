@@ -5,6 +5,9 @@ extensions:
     endpoint: unix:///var/run/docker.sock
     # Permet de découvrir tous les conteneurs (même ceux sans ports réseau exposés)
     include_all_containers: true
+    # Utilise le hostname du conteneur au lieu de son IP pour stabiliser l'identifiant d'endpoint
+    # et éviter que le récepteur ne redémarre constamment si le conteneur est rattaché à plusieurs réseaux
+    use_hostname_if_present: true
     # Exclusion de l'agent lui-même pour prévenir toute boucle infinie d'ingestion de ses propres logs
     excluded_images:
       - "*otel/opentelemetry-collector-contrib*"
