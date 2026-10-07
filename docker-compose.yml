@@ -15,6 +15,7 @@ services:
       - ./volumes/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - /:/hostfs:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     environment:
       #####################
       ### OpenTelemetry ###

@@ -1,4 +1,15 @@
-# Configuration des récepteurs de métriques
+# Extensions pour la découverte dynamique des services et conteneurs
+extensions:
+  # docker_observer écoute les événements de l'API Docker pour détecter l'apparition et l'arrêt des conteneurs
+  docker_observer:
+    endpoint: unix:///var/run/docker.sock
+    # Permet de découvrir tous les conteneurs (même ceux sans ports réseau exposés)
+    include_all_containers: true
+    # Exclusion de l'agent lui-même pour prévenir toute boucle infinie d'ingestion de ses propres logs
+    excluded_images:
+      - "*otel/opentelemetry-collector-contrib*"
+
+# Configuration des récepteurs de télémétrie (métriques et logs)
 receivers:
   # Utilisation du récepteur standard docker_stats pour collecter les métriques Docker
   docker_stats:
@@ -17,6 +28,30 @@ receivers:
       com.docker.compose.service: compose.service
       # Extrait le nom du projet Docker Compose
       com.docker.compose.project: compose.project
+
+  # Collecteur dynamique de logs pour conteneurs Docker
+  receiver_creator:
+    watch_observers: [docker_observer]
+    receivers:
+      filelog:
+        # Filtrage sur port == 0 pour ne créer qu'une seule instance de récepteur par conteneur découvert
+        rule: type == "container" && port == 0
+        config:
+          # Chemin vers le fichier journal JSON standard généré par Docker sur l'hôte
+          include:
+            - /var/lib/docker/containers/`container_id`/`container_id`-json.log
+          start_at: end
+          include_file_path: true
+          operators:
+            # Parseur de logs conteneur (extrait automatiquement le flux, le timestamp et le contenu du log)
+            - type: container
+              format: docker
+        # Injection des attributs de ressource associés au conteneur
+        resource_attributes:
+          container.name: "`name`"
+          container.id: "`container_id`"
+          container.image.name: "`image`"
+
   host_metrics:
     collection_interval: 30s
     scrapers:
@@ -27,7 +62,7 @@ receivers:
 
 # Configuration des processeurs pour transformer les données collectées
 processors:
-  # Utilisation du processeur standard resource pour mapper les attributs de ressources
+  # Utilisation du processeur standard resource pour mapper les attributs de ressources des conteneurs
   resource/containers:
     attributes:
       # Map le service.name sur le nom du conteneur Docker inspecté
@@ -42,6 +77,16 @@ processors:
       - key: host.name
         value: ${HOSTNAME}
         action: upsert
+
+  # Normalisation du nom de conteneur et de service en retirant le slash initial (/) renvoyé par l'API Docker
+  transform/containers:
+    error_mode: ignore
+    log_statements:
+      - context: resource
+        statements:
+          - replace_pattern(attributes["container.name"], "^/(.*)", "$1")
+          - replace_pattern(attributes["service.name"], "^/(.*)", "$1")
+
   # Utilisation du processeur standard resource pour définir les attributs de la machine hôte
   resource/host:
     attributes:
@@ -58,7 +103,7 @@ processors:
         value: ${HOSTNAME}
         action: upsert
 
-  # Processeur de batching standard pour regrouper les métriques et optimiser les exports
+  # Processeur de batching standard pour regrouper la télémétrie et optimiser les exports
   batch:
 
 exporters:
@@ -69,6 +114,7 @@ exporters:
 
 # Définition des pipelines de collecte de télémétrie
 service:
+  extensions: [docker_observer]
   pipelines:
     metrics/containers:
       receivers: [docker_stats]
@@ -77,4 +123,8 @@ service:
     metrics/host:
       receivers: [host_metrics]
       processors: [resource/host, batch]
+      exporters: [otlp]
+    logs/containers:
+      receivers: [receiver_creator]
+      processors: [resource/containers, transform/containers, batch]
       exporters: [otlp]
